@@ -4,9 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
   <title>Todo · 纯前端可持久化</title>
-  <meta name="description" content="零依赖的前端 TodoList：本地持久化、拖拽排序、回收站、导入导出、暗色模式、PWA" />
+  <meta name="description" content="零依赖的前端 TodoList：本地持久化、拖拽排序、回收站、导入导出、暗色模式" />
   <meta name="theme-color" content="#2563eb" />
-  <!-- PWA（可选）：manifest 与图标（内联 svg 作为 favicon） -->
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Crect width='256' height='256' fill='%232563eb'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-size='160' fill='white'%3E%E2%9C%93%3C/text%3E%3C/svg%3E" />
   <style>
@@ -45,7 +44,7 @@
 
     *{ box-sizing: border-box; }
     body{
-      margin:0; font: 15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      margin:0; font: 15px/1.4 system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial,"Noto Sans","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
       background:var(--bg); color:var(--text);
     }
     .container{ max-width: 920px; margin: 24px auto; padding: 0 16px; }
@@ -124,6 +123,9 @@
       .filters{ gap:8px; }
     }
     .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; }
+	/* 让任何带 hidden 属性的元素都强制隐藏，避免被其他样式覆盖 */
+[hidden] { display: none !important; }
+
   </style>
 </head>
 <body>
@@ -191,6 +193,7 @@
           <span class="chip due"><span class="when">无截止</span></span>
           <span class="chip prio">优先级：普通</span>
           <span class="chip pinned" hidden>已置顶</span>
+          <span class="chip doneAt" hidden><span class="done-when">完成时间</span></span>
           <span class="age muted"></span>
         </div>
       </div>
@@ -206,26 +209,47 @@
   <script>
     "use strict";
 
-    // ====== 基础工具 ======
-    const $ = s => document.querySelector(s);
-    const $$ = s => Array.from(document.querySelectorAll(s));
+    // ====== 工具 & DOM ======
+    const must = (sel) => {
+      const el = document.querySelector(sel);
+      if (!el) { console.error("未找到元素：", sel); throw new Error("缺少必要的 DOM：" + sel); }
+      return el;
+    };
+    const $ = (s) => document.querySelector(s);
+    const $$ = (s) => Array.from(document.querySelectorAll(s));
     const STORAGE_KEY = "todo.v2";
     const THEME_KEY = "todo.theme";
-    const APP_VERSION = "1.0.0";
+    const APP_VERSION = "1.1.0 (完成时间)";
 
     const uid = () => (crypto?.randomUUID?.() ?? (`id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`));
+    const safeParse = (raw, fallback) => { try { return JSON.parse(raw); } catch { return fallback; } };
 
-    const safeParse = (raw, fallback) => {
-      try { return JSON.parse(raw); } catch { return fallback; }
+    const refs = {
+      list: must("#list"),
+      empty: must("#empty"),
+      newTitle: must("#newTitle"),
+      newDate: must("#newDate"),
+      newTime: must("#newTime"),
+      newPriority: must("#newPriority"),
+      addBtn: must("#addBtn"),
+      counts: must("#counts"),
+      filterTabs: must(".filters .seg"),
+      search: must("#search"),
+      emptyTrash: must("#emptyTrash"),
+      importBtn: must("#importBtn"),
+      importFile: must("#importFile"),
+      exportBtn: must("#exportBtn"),
+      themeToggle: must("#themeToggle"),
+      tpl: must("#tpl"),
+      version: must("#version"),
     };
 
-    // ====== 状态 ======
+    // ====== 状态初始化 ======
     const defaultState = () => ({ version: 2, nextOrder: 1, todos: [] });
-    let state = (()=>{
+    let state = (() => {
       const raw = localStorage.getItem(STORAGE_KEY);
       const d = safeParse(raw, defaultState());
       if (!d || !Array.isArray(d.todos)) return defaultState();
-      // 兼容字段
       for (const t of d.todos) {
         if (!t.id) t.id = uid();
         if (typeof t.done !== "boolean") t.done = false;
@@ -233,25 +257,26 @@
         if (t.pinned == null) t.pinned = false;
         if (!("order" in t)) t.order = d.nextOrder || 1;
         if (!("priority" in t)) t.priority = "normal";
+        if (!("completedAt" in t)) t.completedAt = null; // 兼容旧数据
       }
       if (!("nextOrder" in d)) d.nextOrder = d.todos.length + 1;
       return d;
     })();
 
-    const persist = () => {
+    function persist() {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       } catch (e) {
-        console.error(e);
-        alert("⚠️ 保存到本地失败：可能浏览器的存储已满。建议立即“导出”做个备份。");
+        console.error("[保存失败]", e);
+        alert("⚠️ 无法写入本地存储：可能在无痕模式、权限受限或配额已满。");
       }
-    };
+    }
 
     // ====== 主题 ======
     (function initTheme(){
       const saved = localStorage.getItem(THEME_KEY) || "auto";
       document.documentElement.setAttribute("data-theme", saved);
-      $("#themeToggle").addEventListener("click", () => {
+      refs.themeToggle.addEventListener("click", () => {
         const cur = document.documentElement.getAttribute("data-theme") || "auto";
         const next = cur === "auto" ? "dark" : (cur === "dark" ? "light" : "auto");
         document.documentElement.setAttribute("data-theme", next);
@@ -259,22 +284,26 @@
       });
     })();
 
-    // ====== 添加任务 ======
-    const refs = {
-      list: $("#list"),
-      empty: $("#empty"),
-      newTitle: $("#newTitle"),
-      newDate: $("#newDate"),
-      newTime: $("#newTime"),
-      newPriority: $("#newPriority"),
-      addBtn: $("#addBtn"),
-      counts: $("#counts"),
-      filterTabs: $(".filters .seg"),
-      search: $("#search"),
-      emptyTrash: $("#emptyTrash"),
-      importFile: $("#importFile")
+    // ====== 时间格式工具 ======
+    const nowMs = () => Date.now();
+    const fmtDate = (ts) => {
+      if (!ts) return "无截止";
+      const d = new Date(ts);
+      const f = new Intl.DateTimeFormat(undefined, { month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+      return f.format(d);
+    };
+    const fmtDateTimeWithWeekday = (ts) => {
+      if (!ts) return "";
+      const d = new Date(ts);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth()+1).padStart(2,"0");
+      const dd = String(d.getDate()).padStart(2,"0");
+      const hm = new Intl.DateTimeFormat("zh-CN", { hour:"2-digit", minute:"2-digit", hour12:false }).format(d);
+      const wk = new Intl.DateTimeFormat("zh-CN", { weekday:"short" }).format(d); // 周一/周二...
+      return `${yyyy}-${mm}-${dd} (${wk}) ${hm}`;
     };
 
+    // ====== 输入取值 ======
     const getDueFromInputs = () => {
       const d = refs.newDate.value;
       const t = refs.newTime.value;
@@ -286,9 +315,101 @@
       return Number.isFinite(ms) ? ms : null;
     };
 
-    const addTodo = () => {
+    // ====== ARIA announcer ======
+    const announcer = document.createElement("div");
+    announcer.className = "sr-only";
+    announcer.setAttribute("role", "status");
+    announcer.setAttribute("aria-live","polite");
+    document.body.appendChild(announcer);
+    const announce = (msg) => { announcer.textContent = msg; };
+
+    // ====== 过滤 & 搜索 ======
+    let filter = "all"; // all | active | done | trash
+    function sortForDisplay(arr){
+      if (filter === "trash") return arr.slice().sort((a,b)=> (b.deletedAt ?? 0) - (a.deletedAt ?? 0));
+      return arr.slice().sort((a,b)=> (b.pinned - a.pinned) || (a.order - b.order));
+    }
+    function filtered(){
+      const q = refs.search.value.trim().toLowerCase();
+      let list = state.todos.filter(t => {
+        if (filter === "active") return !t.deletedAt && !t.done;
+        if (filter === "done")   return !t.deletedAt &&  t.done;
+        if (filter === "trash")  return  t.deletedAt;
+        return !t.deletedAt;
+      });
+      if (q) list = list.filter(t => t.text.toLowerCase().includes(q));
+      return sortForDisplay(list);
+    }
+    function updateCounts(){
+      const all = state.todos.filter(t => !t.deletedAt).length;
+      const active = state.todos.filter(t => !t.deletedAt && !t.done).length;
+      const done = state.todos.filter(t => !t.deletedAt && t.done).length;
+      const trash = state.todos.filter(t => t.deletedAt).length;
+      refs.counts.textContent = `全部 ${all} · 进行中 ${active} · 已完成 ${done} · 回收站 ${trash}`;
+    }
+
+    // ====== 渲染 ======
+    function setDueChip(el, todo){
+      const chip = el.querySelector(".chip.due");
+      const label = chip.querySelector(".when");
+      label.textContent = fmtDate(todo.dueAt);
+      chip.classList.remove("overdue","due-soon","ok");
+      if (!todo.dueAt) return;
+      const diffHrs = (todo.dueAt - nowMs()) / 3600000;
+      if (diffHrs < 0) chip.classList.add("overdue");
+      else if (diffHrs <= 24) chip.classList.add("due-soon");
+      else chip.classList.add("ok");
+    }
+    function setPrioChip(el, todo){
+      el.querySelector(".chip.prio").textContent = `优先级：${todo.priority === "high" ? "高" : todo.priority === "low" ? "低" : "普通"}`;
+    }
+    function setPinnedChip(el, todo){
+      el.querySelector(".chip.pinned").hidden = !todo.pinned;
+    }
+    function setAge(el, todo){
+      const days = Math.floor((nowMs() - todo.createdAt)/86400000);
+      el.querySelector(".age").textContent = days <= 0 ? "今天创建" : `${days} 天前创建`;
+    }
+    function setDoneAtChip(el, todo){
+      const chip = el.querySelector(".chip.doneAt");
+      const span = el.querySelector(".chip.doneAt .done-when");
+      const has = !!todo.completedAt && !!todo.done;
+      chip.hidden = !has;
+      if (has) span.textContent = `完成：${fmtDateTimeWithWeekday(todo.completedAt)}`;
+    }
+
+    function render(){
+      const data = filtered();
+      refs.list.innerHTML = "";
+      for (const todo of data) {
+        const node = refs.tpl.content.firstElementChild.cloneNode(true);
+        node.dataset.id = todo.id;
+        node.querySelector(".toggle").checked = !!todo.done;
+        node.querySelector(".title").textContent = todo.text;
+        node.classList.toggle("done", !!todo.done);
+        setDueChip(node, todo);
+        setPrioChip(node, todo);
+        setPinnedChip(node, todo);
+        setDoneAtChip(node, todo);
+        setAge(node, todo);
+
+        const inTrash = !!todo.deletedAt;
+        const delBtn = node.querySelector(".del");
+        delBtn.textContent = inTrash ? "删除" : "🗑️";
+        delBtn.title = inTrash ? "永久删除" : "删除（移入回收站）";
+        node.querySelector(".restore").hidden = !inTrash;
+        node.setAttribute("draggable", (!inTrash && filter !== "trash"));
+
+        refs.list.appendChild(node);
+      }
+      refs.empty.hidden = data.length > 0;
+      updateCounts();
+    }
+
+    // ====== 添加任务 ======
+    function addTodo(){
       const title = refs.newTitle.value.trim();
-      if (!title) return;
+      if (!title) { alert("请先输入任务标题再添加。"); refs.newTitle.focus(); return; }
       const now = Date.now();
       const todo = {
         id: uid(),
@@ -300,7 +421,8 @@
         priority: refs.newPriority.value || "normal",
         deletedAt: null,
         pinned: false,
-        order: state.nextOrder++
+        order: state.nextOrder++,
+        completedAt: null, // 新字段
       };
       state.todos.push(todo);
       refs.newTitle.value = "";
@@ -310,23 +432,21 @@
       persist();
       render();
       announce("已添加任务");
-    };
+    }
 
+    // ====== 事件绑定 ======
     refs.addBtn.addEventListener("click", addTodo);
     refs.newTitle.addEventListener("keydown", (e)=>{
       if (e.key === "Enter") { e.preventDefault(); addTodo(); }
       else if (e.key === "Escape") { e.currentTarget.blur(); }
     });
 
-    // 快捷键：/ 聚焦搜索
     window.addEventListener("keydown", (e)=>{
       if (e.key === "/" && document.activeElement !== refs.search && !/input|textarea/i.test(document.activeElement?.tagName)) {
         e.preventDefault(); refs.search.focus();
       }
     });
 
-    // ====== 过滤 & 搜索 ======
-    let filter = "all"; // all | active | done | trash
     refs.filterTabs.addEventListener("click", (e)=>{
       if (e.target.matches("button[data-filter]")) {
         $$(".filters .seg button").forEach(b => b.classList.remove("active"));
@@ -337,154 +457,49 @@
     });
     refs.search.addEventListener("input", render);
 
-    // ====== 列表渲染 ======
-    const fmtDate = (ts) => {
-      if (!ts) return "无截止";
-      const d = new Date(ts);
-      const f = new Intl.DateTimeFormat(undefined, { month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
-      return f.format(d);
-    };
-    const daysDiff = (a, b) => Math.floor((a - b) / 86400000);
-    const nowMs = () => Date.now();
-
-    const sortForDisplay = (arr) => {
-      // 置顶优先；然后按自定义 order；回收站按删除时间倒序
-      if (filter === "trash") {
-        return arr.slice().sort((a,b)=> (b.deletedAt ?? 0) - (a.deletedAt ?? 0));
-      }
-      return arr.slice().sort((a,b)=> (b.pinned - a.pinned) || (a.order - b.order));
-    };
-
-    const filtered = () => {
-      const q = refs.search.value.trim().toLowerCase();
-      let list = state.todos.filter(t => {
-        if (filter === "active") return !t.deletedAt && !t.done;
-        if (filter === "done")   return !t.deletedAt &&  t.done;
-        if (filter === "trash")  return  t.deletedAt;
-        return !t.deletedAt; // all
-      });
-      if (q) list = list.filter(t => t.text.toLowerCase().includes(q));
-      return sortForDisplay(list);
-    };
-
-    const updateCounts = () => {
-      const all = state.todos.filter(t => !t.deletedAt).length;
-      const active = state.todos.filter(t => !t.deletedAt && !t.done).length;
-      const done = state.todos.filter(t => !t.deletedAt && t.done).length;
-      const trash = state.todos.filter(t => t.deletedAt).length;
-      refs.counts.textContent = `全部 ${all} · 进行中 ${active} · 已完成 ${done} · 回收站 ${trash}`;
-    };
-
-    const setDueChip = (el, todo) => {
-      const chip = el.querySelector(".chip.due");
-      const label = chip.querySelector(".when");
-      label.textContent = fmtDate(todo.dueAt);
-      chip.classList.remove("overdue","due-soon","ok");
-      if (!todo.dueAt) return;
-      const diffHrs = (todo.dueAt - nowMs()) / 3600000;
-      if (diffHrs < 0) chip.classList.add("overdue");
-      else if (diffHrs <= 24) chip.classList.add("due-soon");
-      else chip.classList.add("ok");
-    };
-    const setPrioChip = (el, todo) => {
-      const pr = el.querySelector(".chip.prio");
-      pr.textContent = `优先级：${todo.priority === "high" ? "高" : todo.priority === "low" ? "低" : "普通"}`;
-    };
-    const setPinnedChip = (el, todo) => {
-      const pin = el.querySelector(".chip.pinned");
-      pin.hidden = !todo.pinned;
-    };
-    const setAge = (el, todo) => {
-      const age = el.querySelector(".age");
-      const d = daysDiff(nowMs(), todo.createdAt);
-      age.textContent = d <= 0 ? "今天创建" : `${d} 天前创建`;
-    };
-
-    const render = () => {
-      const data = filtered();
-      refs.list.innerHTML = "";
-      data.forEach(todo => {
-        const node = $("#tpl").content.firstElementChild.cloneNode(true);
-        node.dataset.id = todo.id;
-        node.querySelector(".toggle").checked = !!todo.done;
-        const titleEl = node.querySelector(".title");
-        titleEl.textContent = todo.text;
-        setDueChip(node, todo);
-        setPrioChip(node, todo);
-        setPinnedChip(node, todo);
-        setAge(node, todo);
-
-        node.classList.toggle("done", !!todo.done);
-
-        // 回收站态
-        const inTrash = !!todo.deletedAt;
-        node.querySelector(".del").textContent = inTrash ? "删除" : "🗑️";
-        node.querySelector(".del").title = inTrash ? "永久删除" : "删除（移入回收站）";
-        node.querySelector(".restore").hidden = !inTrash;
-        node.setAttribute("draggable", (!inTrash && filter !== "trash")); // 回收站不可拖拽
-
-        refs.list.appendChild(node);
-      });
-
-      refs.empty.hidden = data.length > 0;
-      updateCounts();
-    };
-
-    // ====== 列表交互（事件代理） ======
+    // 列表交互
     refs.list.addEventListener("change", (e)=>{
-      const row = e.target.closest(".todo");
-      if (!row) return;
-      const id = row.dataset.id;
-      const todo = state.todos.find(t => t.id === id);
-      if (!todo) return;
+      const row = e.target.closest(".todo"); if (!row) return;
+      const todo = state.todos.find(t => t.id === row.dataset.id); if (!todo) return;
       if (e.target.matches(".toggle")) {
-        todo.done = !!e.target.checked;
-        todo.updatedAt = Date.now();
-        persist();
-        render();
+        const now = Date.now();
+        const checked = !!e.target.checked;
+        todo.done = checked;
+        // 如果希望每次勾选都刷新完成时间，把下一行改成：todo.completedAt = checked ? now : null;
+        todo.completedAt = checked ? (todo.completedAt ?? now) : null;
+        todo.updatedAt = now;
+        persist(); render();
       }
     });
-
     refs.list.addEventListener("click", (e)=>{
-      const row = e.target.closest(".todo");
-      if (!row) return;
-      const id = row.dataset.id;
-      const todo = state.todos.find(t => t.id === id);
-      if (!todo) return;
+      const row = e.target.closest(".todo"); if (!row) return;
+      const todo = state.todos.find(t => t.id === row.dataset.id); if (!todo) return;
 
       if (e.target.matches(".pin")) {
-        todo.pinned = !todo.pinned;
-        todo.updatedAt = Date.now();
-        persist();
-        render();
+        todo.pinned = !todo.pinned; todo.updatedAt = Date.now(); persist(); render();
       } else if (e.target.matches(".schedule")) {
-        const val = prompt("设置截止时间（YYYY-MM-DD 或 YYYY-MM-DD HH:mm）\n留空可清除：", todo.dueAt ? new Date(todo.dueAt).toISOString().slice(0,16).replace("T"," ") : "");
+        const val = prompt("设置截止时间（YYYY-MM-DD 或 YYYY-MM-DD HH:mm）\n留空可清除：",
+          todo.dueAt ? new Date(todo.dueAt).toISOString().slice(0,16).replace("T"," ") : "");
         if (val === null) return;
         const s = val.trim();
         if (!s) todo.dueAt = null;
         else {
-          const ds = s.replace(" ", "T");
-          const t = Date.parse(ds);
+          const t = Date.parse(s.replace(" ","T"));
           if (Number.isFinite(t)) todo.dueAt = t;
           else alert("无法解析这个日期时间，请按示例格式。");
         }
-        todo.updatedAt = Date.now();
-        persist();
-        render();
+        todo.updatedAt = Date.now(); persist(); render();
       } else if (e.target.matches(".del")) {
         if (todo.deletedAt) {
           if (confirm("确定要永久删除这条任务吗？此操作不可恢复。")) {
-            state.todos = state.todos.filter(t => t.id !== id);
+            state.todos = state.todos.filter(t => t.id !== todo.id);
           }
         } else {
           todo.deletedAt = Date.now();
         }
-        persist();
-        render();
-      } else if (e.target.matches(".restore")) {
-        todo.deletedAt = null;
-        todo.updatedAt = Date.now();
         persist(); render();
+      } else if (e.target.matches(".restore")) {
+        todo.deletedAt = null; todo.updatedAt = Date.now(); persist(); render();
       }
     });
 
@@ -551,7 +566,6 @@
       }, { offset: Number.NEGATIVE_INFINITY }).element;
     }
     function applyOrderFromIds(ids){
-      // 只对当前过滤结果中的任务调整 order
       const visibleIds = new Set(filtered().map(t=>t.id));
       let base = Math.min(...state.todos.filter(t=>visibleIds.has(t.id)).map(t=>t.order));
       if (!Number.isFinite(base)) base = 0;
@@ -559,11 +573,48 @@
         const t = state.todos.find(x => x.id === id);
         if (t && visibleIds.has(id)) t.order = base + i;
       });
-      // 按 pinned + order 归一化排序
       state.todos.sort((a,b)=> (b.pinned - a.pinned) || (a.order - b.order));
     }
 
-    // 清空回收站
+    // 导出 / 导入
+    refs.exportBtn.addEventListener("click", ()=>{
+      const data = JSON.stringify(state, null, 2);
+      const blob = new Blob([data], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `todolist-backup-${new Date().toISOString().slice(0,10)}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=> URL.revokeObjectURL(url), 1000);
+    });
+    refs.importBtn.addEventListener("click", ()=> refs.importFile.click());
+    refs.importFile.addEventListener("change", (e)=>{
+      const file = e.target.files?.[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const incoming = JSON.parse(reader.result);
+          if (!incoming || !Array.isArray(incoming.todos)) throw new Error("格式不正确");
+          const seen = new Set(state.todos.map(t => t.id));
+          for (const t of incoming.todos) {
+            if (!t.id) t.id = uid();
+            if (seen.has(t.id)) continue;
+            // 兼容缺少 completedAt 的备份
+            if (!("completedAt" in t)) t.completedAt = null;
+            state.todos.push(t);
+            seen.add(t.id);
+            state.nextOrder = Math.max(state.nextOrder, (t.order ?? 0) + 1);
+          }
+          persist(); render();
+          alert("导入完成（已与现有任务合并）。");
+        } catch (err) {
+          console.error("[导入失败]", err);
+          alert("导入失败：文件格式不正确或已损坏。");
+        } finally { e.target.value = ""; }
+      };
+      reader.readAsText(file, "utf-8");
+    });
+
+    // 回收站清空
     refs.emptyTrash.addEventListener("click", ()=>{
       const count = state.todos.filter(t=>t.deletedAt).length;
       if (!count) { alert("回收站为空。"); return; }
@@ -573,62 +624,14 @@
       }
     });
 
-    // 导出 / 导入
-    $("#exportBtn").addEventListener("click", ()=>{
-      const data = JSON.stringify(state, null, 2);
-      const blob = new Blob([data], {type: "application/json"});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      const date = new Date().toISOString().slice(0,10);
-      a.download = `todolist-backup-${date}.json`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(()=> URL.revokeObjectURL(url), 1000);
-    });
-    $("#importBtn").addEventListener("click", ()=> refs.importFile.click());
-    refs.importFile.addEventListener("change", (e)=>{
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        try {
-          const incoming = JSON.parse(reader.result);
-          if (!incoming || !Array.isArray(incoming.todos)) throw new Error("格式不正确");
-          const seen = new Set(state.todos.map(t => t.id));
-          for (const t of incoming.todos) {
-            if (!t.id) t.id = uid();
-            if (seen.has(t.id)) continue; // 简单合并：忽略重复
-            state.todos.push(t);
-            seen.add(t.id);
-            state.nextOrder = Math.max(state.nextOrder, (t.order ?? 0) + 1);
-          }
-          persist(); render();
-          alert("导入完成（已与现有任务合并）。");
-        } catch (err) {
-          alert("导入失败：文件格式不正确或已损坏。");
-        } finally {
-          e.target.value = ""; // 允许下次选择同一文件
-        }
-      };
-      reader.readAsText(file, "utf-8");
-    });
-
-    // ARIA 提示
-    const announcer = document.createElement("div");
-    announcer.className = "sr-only";
-    announcer.setAttribute("role", "status");
-    announcer.setAttribute("aria-live","polite");
-    document.body.appendChild(announcer);
-    const announce = (msg) => { announcer.textContent = msg; };
-
-    // 初始渲染
-    $("#version").textContent = `v${APP_VERSION}`;
+    // 初次渲染
+    refs.version.textContent = `v${APP_VERSION}`;
     render();
 
     // PWA（可选）：注册 Service Worker
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch(()=>{ /* 忽略：未提供 sw.js 也正常运行 */ });
+        navigator.serviceWorker.register("./sw.js").catch(()=>{});
       });
     }
   </script>
