@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Todo · 纯前端可持久化</title>
+  <meta name="description" content="零依赖的前端 TodoList：本地持久化、拖拽排序、回收站、导入导出、暗色模式、PWA" />
+  <meta name="theme-color" content="#2563eb" />
+  <!-- PWA（可选）：manifest 与图标（内联 svg 作为 favicon） -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Crect width='256' height='256' fill='%232563eb'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-size='160' fill='white'%3E%E2%9C%93%3C/text%3E%3C/svg%3E" />
+  <style>
+    :root{
+      --bg: #f6f7f9;
+      --surface:#ffffff;
+      --text:#111827;
+      --muted:#6b7280;
+      --border:#e5e7eb;
+      --accent:#2563eb;
+      --accent-fg:#ffffff;
+      --danger:#ef4444;
+      --warn:#f59e0b;
+      --ok:#16a34a;
+      --shadow: 0 6px 24px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04);
+      --radius:12px;
+    }
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg:#0b0e14;
+        --surface:#11151c;
+        --text:#e5e7eb;
+        --muted:#98a2b3;
+        --border:#1f2937;
+        --accent:#3b82f6;
+        --accent-fg:#0b0e14;
+        --shadow: 0 6px 24px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.35);
+      }
+    }
+    html[data-theme="light"]{ color-scheme: light; }
+    html[data-theme="dark"]{
+      color-scheme: dark;
+      --bg:#0b0e14; --surface:#11151c; --text:#e5e7eb; --muted:#98a2b3;
+      --border:#1f2937; --accent:#3b82f6; --accent-fg:#0b0e14; --shadow: 0 6px 24px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.35);
+    }
+
+    *{ box-sizing: border-box; }
+    body{
+      margin:0; font: 15px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+      background:var(--bg); color:var(--text);
+    }
+    .container{ max-width: 920px; margin: 24px auto; padding: 0 16px; }
+    .topbar{
+      display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:16px;
+    }
+    .brand{ display:flex; align-items:center; gap:10px; }
+    .brand .logo{ width:36px; height:36px; display:grid; place-items:center; border-radius:10px; background:var(--accent); color:var(--accent-fg); box-shadow: var(--shadow); font-weight:700; }
+    .top-actions{ display:flex; gap:8px; align-items:center; }
+    .btn{
+      appearance:none; border:1px solid var(--border); background:var(--surface);
+      color:var(--text); padding:8px 12px; border-radius:10px; cursor:pointer; transition:.2s;
+    }
+    .btn:hover{ transform: translateY(-1px); box-shadow: var(--shadow); }
+    .btn.primary{ background:var(--accent); color:var(--accent-fg); border-color:transparent; }
+    .btn.ghost{ background:transparent; border-color:var(--border); }
+    .btn.danger{ background: var(--danger); color:#fff; border-color: transparent; }
+    .btn.small{ padding:6px 10px; border-radius:8px; font-size: 13px; }
+    .badge{ display:inline-flex; align-items:center; gap:6px; background:var(--surface); border:1px solid var(--border); padding:6px 10px; border-radius:999px; color:var(--muted); }
+
+    .card{
+      background:var(--surface); border:1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+
+    .composer{ padding:14px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+    .composer input[type="text"]{
+      flex:1 1 420px; padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text);
+      outline:none;
+    }
+    .composer input[type="date"], .composer input[type="time"], .composer select{
+      padding:10px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text);
+    }
+
+    .filters{
+      margin-top:10px; padding:10px 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; justify-content:space-between;
+    }
+    .filter-left, .filter-right{ display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .seg{ display:flex; background:var(--surface); border:1px solid var(--border); padding:4px; border-radius:12px; }
+    .seg button{ border:none; background:transparent; padding:8px 12px; border-radius:8px; cursor:pointer; color:var(--muted); }
+    .seg button.active{ background:var(--accent); color:var(--accent-fg); }
+
+    #search{ padding:9px 12px; border-radius:10px; border:1px solid var(--border); background:transparent; color:var(--text); min-width: 200px; }
+
+    .list{ margin-top:14px; padding:8px; }
+    .todo{ display:flex; align-items:flex-start; gap:10px; padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--surface); margin:8px 0; box-shadow: var(--shadow); }
+    .todo.dragging{ opacity:.6; }
+    .drag-handle{ cursor:grab; user-select:none; padding:4px 6px; border-radius:8px; color:var(--muted); }
+    .todo:hover .drag-handle{ background: rgba(127,127,127,.08); }
+    .check{ display:grid; place-items:center; }
+    .check input{ width:20px; height:20px; }
+
+    .content{ flex:1; min-width: 180px; }
+    .title[contenteditable="true"]{
+      outline:none; border-radius:8px; padding:2px 4px; line-height: 1.4;
+    }
+    .title:focus{ box-shadow: 0 0 0 2px rgba(37,99,235,.35); background: rgba(37,99,235,.06); }
+    .todo.done .title{ text-decoration: line-through; color:var(--muted); }
+    .meta{ margin-top:6px; display:flex; gap:10px; flex-wrap:wrap; font-size:13px; color:var(--muted); }
+    .meta .chip{ display:inline-flex; align-items:center; gap:6px; padding:4px 8px; border-radius:999px; border:1px solid var(--border); background:transparent; }
+    .chip.overdue{ color:#fff; background: var(--danger); border-color: transparent; }
+    .chip.due-soon{ background: rgba(245, 158, 11, .18); color:#fbbf24; border-color: transparent; }
+    .chip.ok{ background: rgba(22,163,74,.18); color:#34d399; border-color: transparent; }
+    .chip.pinned{ background: rgba(59,130,246,.18); color:#60a5fa; border-color: transparent; }
+
+    .ops{ display:flex; gap:6px; align-items:center; }
+    .ops .btn.small{ white-space:nowrap; }
+    .muted{ color:var(--muted); }
+
+    .empty{ text-align:center; color:var(--muted); padding:36px 12px; }
+    .footer{ display:flex; justify-content:space-between; align-items:center; padding:16px 14px; color:var(--muted); }
+
+    @media (max-width:640px){
+      .composer{ gap:6px; }
+      .composer input[type="text"]{ flex-basis: 100%; }
+      #search{ min-width: 120px; flex: 1; }
+      .filters{ gap:8px; }
+    }
+    .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); border:0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">✓</div>
+        <div>
+          <div style="font-weight:700">待办清单</div>
+          <div class="muted" style="font-size:12px;">纯前端 · 本地持久化 · GitHub Pages</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <button id="themeToggle" class="btn ghost" title="切换主题">🌓 主题</button>
+        <button id="exportBtn" class="btn ghost" title="导出备份">🗂️ 导出</button>
+        <button id="importBtn" class="btn ghost" title="导入备份">⬆️ 导入</button>
+        <input id="importFile" type="file" accept="application/json" class="sr-only" />
+      </div>
+    </div>
+
+    <div class="card composer" role="form" aria-label="添加任务">
+      <input id="newTitle" type="text" placeholder="写点啥… 回车添加（例：给项目写 README）" autocomplete="off" />
+      <input id="newDate" type="date" />
+      <input id="newTime" type="time" />
+      <select id="newPriority" title="优先级">
+        <option value="normal" selected>优先级：普通</option>
+        <option value="high">优先级：高</option>
+        <option value="low">优先级：低</option>
+      </select>
+      <button id="addBtn" class="btn primary">添加</button>
+    </div>
+
+    <div class="card filters">
+      <div class="filter-left">
+        <div class="seg" role="tablist" aria-label="筛选">
+          <button data-filter="all" class="active" role="tab" aria-selected="true">全部</button>
+          <button data-filter="active" role="tab" aria-selected="false">进行中</button>
+          <button data-filter="done" role="tab" aria-selected="false">已完成</button>
+          <button data-filter="trash" role="tab" aria-selected="false">回收站</button>
+        </div>
+        <span class="badge" id="counts">0 项</span>
+      </div>
+      <div class="filter-right">
+        <input id="search" type="search" placeholder="搜索（/ 快捷键）" />
+        <button id="emptyTrash" class="btn small danger" title="永久删除回收站内容">清空回收站</button>
+      </div>
+    </div>
+
+    <div class="list" id="list" aria-live="polite"></div>
+    <div id="empty" class="empty muted">没有任务。添加一个试试吧 ✨</div>
+
+    <div class="card footer">
+      <div>数据保存在你的浏览器（localStorage）。只有你手动清空回收站才会真正删除。</div>
+      <div id="version" class="muted"></div>
+    </div>
+  </div>
+
+  <template id="tpl">
+    <div class="todo" draggable="true">
+      <div class="drag-handle" title="拖拽排序" aria-hidden="true">⋮⋮</div>
+      <label class="check"><input class="toggle" type="checkbox" aria-label="完成" /></label>
+      <div class="content">
+        <div class="title" contenteditable="true" role="textbox" aria-label="编辑任务标题"></div>
+        <div class="meta">
+          <span class="chip due"><span class="when">无截止</span></span>
+          <span class="chip prio">优先级：普通</span>
+          <span class="chip pinned" hidden>已置顶</span>
+          <span class="age muted"></span>
+        </div>
+      </div>
+      <div class="ops">
+        <button class="btn small pin" title="置顶/取消置顶">📌</button>
+        <button class="btn small schedule" title="设置/清除截止">⏰</button>
+        <button class="btn small del" title="删除（移入回收站）">🗑️</button>
+        <button class="btn small restore" title="还原" hidden>↩️</button>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    "use strict";
+
+    // ====== 基础工具 ======
+    const $ = s => document.querySelector(s);
+    const $$ = s => Array.from(document.querySelectorAll(s));
+    const STORAGE_KEY = "todo.v2";
+    const THEME_KEY = "todo.theme";
+    const APP_VERSION = "1.0.0";
+
+    const uid = () => (crypto?.randomUUID?.() ?? (`id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2,8)}`));
+
+    const safeParse = (raw, fallback) => {
+      try { return JSON.parse(raw); } catch { return fallback; }
+    };
+
+    // ====== 状态 ======
+    const defaultState = () => ({ version: 2, nextOrder: 1, todos: [] });
+    let state = (()=>{
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const d = safeParse(raw, defaultState());
+      if (!d || !Array.isArray(d.todos)) return defaultState();
+      // 兼容字段
+      for (const t of d.todos) {
+        if (!t.id) t.id = uid();
+        if (typeof t.done !== "boolean") t.done = false;
+        if (t.deletedAt == null) t.deletedAt = null;
+        if (t.pinned == null) t.pinned = false;
+        if (!("order" in t)) t.order = d.nextOrder || 1;
+        if (!("priority" in t)) t.priority = "normal";
+      }
+      if (!("nextOrder" in d)) d.nextOrder = d.todos.length + 1;
+      return d;
+    })();
+
+    const persist = () => {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      } catch (e) {
+        console.error(e);
+        alert("⚠️ 保存到本地失败：可能浏览器的存储已满。建议立即“导出”做个备份。");
+      }
+    };
+
+    // ====== 主题 ======
+    (function initTheme(){
+      const saved = localStorage.getItem(THEME_KEY) || "auto";
+      document.documentElement.setAttribute("data-theme", saved);
+      $("#themeToggle").addEventListener("click", () => {
+        const cur = document.documentElement.getAttribute("data-theme") || "auto";
+        const next = cur === "auto" ? "dark" : (cur === "dark" ? "light" : "auto");
+        document.documentElement.setAttribute("data-theme", next);
+        localStorage.setItem(THEME_KEY, next);
+      });
+    })();
+
+    // ====== 添加任务 ======
+    const refs = {
+      list: $("#list"),
+      empty: $("#empty"),
+      newTitle: $("#newTitle"),
+      newDate: $("#newDate"),
+      newTime: $("#newTime"),
+      newPriority: $("#newPriority"),
+      addBtn: $("#addBtn"),
+      counts: $("#counts"),
+      filterTabs: $(".filters .seg"),
+      search: $("#search"),
+      emptyTrash: $("#emptyTrash"),
+      importFile: $("#importFile")
+    };
+
+    const getDueFromInputs = () => {
+      const d = refs.newDate.value;
+      const t = refs.newTime.value;
+      if (!d && !t) return null;
+      const dateStr = d || new Date().toISOString().slice(0,10);
+      const timeStr = t || "00:00";
+      const dt = new Date(`${dateStr}T${timeStr}`);
+      const ms = dt.getTime();
+      return Number.isFinite(ms) ? ms : null;
+    };
+
+    const addTodo = () => {
+      const title = refs.newTitle.value.trim();
+      if (!title) return;
+      const now = Date.now();
+      const todo = {
+        id: uid(),
+        text: title,
+        done: false,
+        createdAt: now,
+        updatedAt: now,
+        dueAt: getDueFromInputs(),
+        priority: refs.newPriority.value || "normal",
+        deletedAt: null,
+        pinned: false,
+        order: state.nextOrder++
+      };
+      state.todos.push(todo);
+      refs.newTitle.value = "";
+      refs.newDate.value = "";
+      refs.newTime.value = "";
+      refs.newPriority.value = "normal";
+      persist();
+      render();
+      announce("已添加任务");
+    };
+
+    refs.addBtn.addEventListener("click", addTodo);
+    refs.newTitle.addEventListener("keydown", (e)=>{
+      if (e.key === "Enter") { e.preventDefault(); addTodo(); }
+      else if (e.key === "Escape") { e.currentTarget.blur(); }
+    });
+
+    // 快捷键：/ 聚焦搜索
+    window.addEventListener("keydown", (e)=>{
+      if (e.key === "/" && document.activeElement !== refs.search && !/input|textarea/i.test(document.activeElement?.tagName)) {
+        e.preventDefault(); refs.search.focus();
+      }
+    });
+
+    // ====== 过滤 & 搜索 ======
+    let filter = "all"; // all | active | done | trash
+    refs.filterTabs.addEventListener("click", (e)=>{
+      if (e.target.matches("button[data-filter]")) {
+        $$(".filters .seg button").forEach(b => b.classList.remove("active"));
+        e.target.classList.add("active");
+        filter = e.target.dataset.filter;
+        render();
+      }
+    });
+    refs.search.addEventListener("input", render);
+
+    // ====== 列表渲染 ======
+    const fmtDate = (ts) => {
+      if (!ts) return "无截止";
+      const d = new Date(ts);
+      const f = new Intl.DateTimeFormat(undefined, { month:"short", day:"2-digit", hour:"2-digit", minute:"2-digit" });
+      return f.format(d);
+    };
+    const daysDiff = (a, b) => Math.floor((a - b) / 86400000);
+    const nowMs = () => Date.now();
+
+    const sortForDisplay = (arr) => {
+      // 置顶优先；然后按自定义 order；回收站按删除时间倒序
+      if (filter === "trash") {
+        return arr.slice().sort((a,b)=> (b.deletedAt ?? 0) - (a.deletedAt ?? 0));
+      }
+      return arr.slice().sort((a,b)=> (b.pinned - a.pinned) || (a.order - b.order));
+    };
+
+    const filtered = () => {
+      const q = refs.search.value.trim().toLowerCase();
+      let list = state.todos.filter(t => {
+        if (filter === "active") return !t.deletedAt && !t.done;
+        if (filter === "done")   return !t.deletedAt &&  t.done;
+        if (filter === "trash")  return  t.deletedAt;
+        return !t.deletedAt; // all
+      });
+      if (q) list = list.filter(t => t.text.toLowerCase().includes(q));
+      return sortForDisplay(list);
+    };
+
+    const updateCounts = () => {
+      const all = state.todos.filter(t => !t.deletedAt).length;
+      const active = state.todos.filter(t => !t.deletedAt && !t.done).length;
+      const done = state.todos.filter(t => !t.deletedAt && t.done).length;
+      const trash = state.todos.filter(t => t.deletedAt).length;
+      refs.counts.textContent = `全部 ${all} · 进行中 ${active} · 已完成 ${done} · 回收站 ${trash}`;
+    };
+
+    const setDueChip = (el, todo) => {
+      const chip = el.querySelector(".chip.due");
+      const label = chip.querySelector(".when");
+      label.textContent = fmtDate(todo.dueAt);
+      chip.classList.remove("overdue","due-soon","ok");
+      if (!todo.dueAt) return;
+      const diffHrs = (todo.dueAt - nowMs()) / 3600000;
+      if (diffHrs < 0) chip.classList.add("overdue");
+      else if (diffHrs <= 24) chip.classList.add("due-soon");
+      else chip.classList.add("ok");
+    };
+    const setPrioChip = (el, todo) => {
+      const pr = el.querySelector(".chip.prio");
+      pr.textContent = `优先级：${todo.priority === "high" ? "高" : todo.priority === "low" ? "低" : "普通"}`;
+    };
+    const setPinnedChip = (el, todo) => {
+      const pin = el.querySelector(".chip.pinned");
+      pin.hidden = !todo.pinned;
+    };
+    const setAge = (el, todo) => {
+      const age = el.querySelector(".age");
+      const d = daysDiff(nowMs(), todo.createdAt);
+      age.textContent = d <= 0 ? "今天创建" : `${d} 天前创建`;
+    };
+
+    const render = () => {
+      const data = filtered();
+      refs.list.innerHTML = "";
+      data.forEach(todo => {
+        const node = $("#tpl").content.firstElementChild.cloneNode(true);
+        node.dataset.id = todo.id;
+        node.querySelector(".toggle").checked = !!todo.done;
+        const titleEl = node.querySelector(".title");
+        titleEl.textContent = todo.text;
+        setDueChip(node, todo);
+        setPrioChip(node, todo);
+        setPinnedChip(node, todo);
+        setAge(node, todo);
+
+        node.classList.toggle("done", !!todo.done);
+
+        // 回收站态
+        const inTrash = !!todo.deletedAt;
+        node.querySelector(".del").textContent = inTrash ? "删除" : "🗑️";
+        node.querySelector(".del").title = inTrash ? "永久删除" : "删除（移入回收站）";
+        node.querySelector(".restore").hidden = !inTrash;
+        node.setAttribute("draggable", (!inTrash && filter !== "trash")); // 回收站不可拖拽
+
+        refs.list.appendChild(node);
+      });
+
+      refs.empty.hidden = data.length > 0;
+      updateCounts();
+    };
+
+    // ====== 列表交互（事件代理） ======
+    refs.list.addEventListener("change", (e)=>{
+      const row = e.target.closest(".todo");
+      if (!row) return;
+      const id = row.dataset.id;
+      const todo = state.todos.find(t => t.id === id);
+      if (!todo) return;
+      if (e.target.matches(".toggle")) {
+        todo.done = !!e.target.checked;
+        todo.updatedAt = Date.now();
+        persist();
+        render();
+      }
+    });
+
+    refs.list.addEventListener("click", (e)=>{
+      const row = e.target.closest(".todo");
+      if (!row) return;
+      const id = row.dataset.id;
+      const todo = state.todos.find(t => t.id === id);
+      if (!todo) return;
+
+      if (e.target.matches(".pin")) {
+        todo.pinned = !todo.pinned;
+        todo.updatedAt = Date.now();
+        persist();
+        render();
+      } else if (e.target.matches(".schedule")) {
+        const val = prompt("设置截止时间（YYYY-MM-DD 或 YYYY-MM-DD HH:mm）\n留空可清除：", todo.dueAt ? new Date(todo.dueAt).toISOString().slice(0,16).replace("T"," ") : "");
+        if (val === null) return;
+        const s = val.trim();
+        if (!s) todo.dueAt = null;
+        else {
+          const ds = s.replace(" ", "T");
+          const t = Date.parse(ds);
+          if (Number.isFinite(t)) todo.dueAt = t;
+          else alert("无法解析这个日期时间，请按示例格式。");
+        }
+        todo.updatedAt = Date.now();
+        persist();
+        render();
+      } else if (e.target.matches(".del")) {
+        if (todo.deletedAt) {
+          if (confirm("确定要永久删除这条任务吗？此操作不可恢复。")) {
+            state.todos = state.todos.filter(t => t.id !== id);
+          }
+        } else {
+          todo.deletedAt = Date.now();
+        }
+        persist();
+        render();
+      } else if (e.target.matches(".restore")) {
+        todo.deletedAt = null;
+        todo.updatedAt = Date.now();
+        persist(); render();
+      }
+    });
+
+    // 行内编辑
+    refs.list.addEventListener("keydown", (e)=>{
+      const title = e.target.closest(".title[contenteditable='true']");
+      if (!title) return;
+      if (e.key === "Enter") { e.preventDefault(); title.blur(); }
+      if (e.key === "Escape") { document.execCommand?.("undo"); title.blur(); }
+    });
+    refs.list.addEventListener("blur", (e)=>{
+      const title = e.target.closest(".title[contenteditable='true']");
+      if (!title) return;
+      const row = title.closest(".todo");
+      const todo = state.todos.find(t => t.id === row.dataset.id);
+      const newText = title.textContent.trim();
+      if (todo && newText && newText !== todo.text) {
+        todo.text = newText; todo.updatedAt = Date.now(); persist(); render();
+      } else if (!newText) { title.textContent = todo?.text ?? ""; }
+    }, true);
+
+    // 拖拽排序（仅非回收站）
+    let draggingId = null;
+    refs.list.addEventListener("dragstart", (e)=>{
+      const row = e.target.closest(".todo");
+      if (!row || filter === "trash") return;
+      draggingId = row.dataset.id;
+      row.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    refs.list.addEventListener("dragover", (e)=>{
+      if (!draggingId) return;
+      e.preventDefault();
+      const container = refs.list;
+      const after = getDragAfterElement(container, e.clientY);
+      const draggingEl = container.querySelector(".todo.dragging");
+      if (!draggingEl) return;
+      if (after == null) container.appendChild(draggingEl);
+      else container.insertBefore(draggingEl, after);
+    });
+    refs.list.addEventListener("drop", (e)=>{
+      if (!draggingId) return;
+      e.preventDefault();
+      const ids = [...refs.list.querySelectorAll(".todo")].map(el => el.dataset.id);
+      applyOrderFromIds(ids);
+      const el = refs.list.querySelector(".todo.dragging");
+      if (el) el.classList.remove("dragging");
+      draggingId = null;
+      persist(); render();
+    });
+    refs.list.addEventListener("dragend", ()=>{
+      const el = refs.list.querySelector(".todo.dragging");
+      if (el) el.classList.remove("dragging");
+      draggingId = null;
+    });
+    function getDragAfterElement(container, y) {
+      const items = [...container.querySelectorAll(".todo:not(.dragging)")];
+      return items.reduce((closest, child)=>{
+        const box = child.getBoundingClientRect();
+        const offset = y - (box.top + box.height/2);
+        if (offset < 0 && offset > closest.offset) {
+          return { offset, element: child };
+        } else return closest;
+      }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+    function applyOrderFromIds(ids){
+      // 只对当前过滤结果中的任务调整 order
+      const visibleIds = new Set(filtered().map(t=>t.id));
+      let base = Math.min(...state.todos.filter(t=>visibleIds.has(t.id)).map(t=>t.order));
+      if (!Number.isFinite(base)) base = 0;
+      ids.forEach((id, i)=>{
+        const t = state.todos.find(x => x.id === id);
+        if (t && visibleIds.has(id)) t.order = base + i;
+      });
+      // 按 pinned + order 归一化排序
+      state.todos.sort((a,b)=> (b.pinned - a.pinned) || (a.order - b.order));
+    }
+
+    // 清空回收站
+    refs.emptyTrash.addEventListener("click", ()=>{
+      const count = state.todos.filter(t=>t.deletedAt).length;
+      if (!count) { alert("回收站为空。"); return; }
+      if (confirm(`永久删除回收站中的 ${count} 条任务？此操作不可恢复。`)) {
+        state.todos = state.todos.filter(t=>!t.deletedAt);
+        persist(); render();
+      }
+    });
+
+    // 导出 / 导入
+    $("#exportBtn").addEventListener("click", ()=>{
+      const data = JSON.stringify(state, null, 2);
+      const blob = new Blob([data], {type: "application/json"});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const date = new Date().toISOString().slice(0,10);
+      a.download = `todolist-backup-${date}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=> URL.revokeObjectURL(url), 1000);
+    });
+    $("#importBtn").addEventListener("click", ()=> refs.importFile.click());
+    refs.importFile.addEventListener("change", (e)=>{
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const incoming = JSON.parse(reader.result);
+          if (!incoming || !Array.isArray(incoming.todos)) throw new Error("格式不正确");
+          const seen = new Set(state.todos.map(t => t.id));
+          for (const t of incoming.todos) {
+            if (!t.id) t.id = uid();
+            if (seen.has(t.id)) continue; // 简单合并：忽略重复
+            state.todos.push(t);
+            seen.add(t.id);
+            state.nextOrder = Math.max(state.nextOrder, (t.order ?? 0) + 1);
+          }
+          persist(); render();
+          alert("导入完成（已与现有任务合并）。");
+        } catch (err) {
+          alert("导入失败：文件格式不正确或已损坏。");
+        } finally {
+          e.target.value = ""; // 允许下次选择同一文件
+        }
+      };
+      reader.readAsText(file, "utf-8");
+    });
+
+    // ARIA 提示
+    const announcer = document.createElement("div");
+    announcer.className = "sr-only";
+    announcer.setAttribute("role", "status");
+    announcer.setAttribute("aria-live","polite");
+    document.body.appendChild(announcer);
+    const announce = (msg) => { announcer.textContent = msg; };
+
+    // 初始渲染
+    $("#version").textContent = `v${APP_VERSION}`;
+    render();
+
+    // PWA（可选）：注册 Service Worker
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").catch(()=>{ /* 忽略：未提供 sw.js 也正常运行 */ });
+      });
+    }
+  </script>
+</body>
+</html>
